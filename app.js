@@ -165,3 +165,159 @@ function filterList(list) {
     });
     renderGrid();
   };
+function bindSubmit() {
+    var form = document.getElementById('submissionForm');
+    if (!form) return;
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var fd = new FormData(form);
+      var title = String(fd.get('title') || '').trim();
+      var type = String(fd.get('type') || 'BUSINESS');
+      var url = String(fd.get('url') || '').trim();
+      var price = Number(fd.get('price') || 0);
+      var desc = String(fd.get('description') || '').trim();
+      if (!title || !desc || !url) { toast('Fill required fields', 'error'); return; }
+
+      var rec = {
+        title: title, type: type, desc: desc, price: price || 0,
+        status: 'UNDER_REVIEW', score: 0, risk: 'UNASSESSED', url: url,
+        createdAt: new Date().toISOString()
+      };
+
+      function done(id) {
+        var result = document.getElementById('submissionResult');
+        if (result) {
+          result.innerHTML = '<strong>INSPECTION RECORD CREATED</strong><span>' + id + '</span><p>Not public until review is complete.</p>';
+        }
+        form.reset();
+        toast('Record created', 'success');
+        renderGrid();
+      }
+
+      if (fb.mode === 'firebase' && fb.db) {
+        if (!user) { toast('Sign in required', 'error'); return; }
+        rec.sellerId = user.uid;
+        fb.db.collection('listings').add(rec).then(function (ref) { done(ref.id); })
+          .catch(function () { toast('Submit failed — check login and rules', 'error'); });
+        return;
+      }
+      var list = assetsLocal();
+      rec.id = 'WL-' + String(50 + list.length + 1).padStart(4, '0');
+      list.unshift(rec);
+      lsSet('WL_ASSETS', list);
+      done(rec.id);
+    });
+  }
+
+  window.handleOffer = function (form) {
+    var fd = new FormData(form);
+    var assetId = fd.get('asset');
+    var buyer = String(fd.get('buyer') || '').trim();
+    var amount = Number(fd.get('amount') || 0);
+    if (!buyer || amount < 1) { toast('Buyer and amount required', 'error'); return; }
+
+    function go(txId) {
+      toast('Offer recorded', 'success');
+      setTimeout(function () { location.href = 'transaction.html?id=' + encodeURIComponent(txId); }, 400);
+    }
+
+    if (fb.mode === 'firebase' && fb.db) {
+      if (!user) { toast('Sign in required', 'error'); return; }
+      window.getListingAsync(assetId).then(function (listing) {
+        var offer = {
+          listingId: assetId, buyerId: user.uid, buyerName: buyer,
+          sellerId: listing && listing.sellerId || null,
+          amount: amount, status: 'RECORDED', createdAt: new Date().toISOString()
+        };
+        return fb.db.collection('offers').add(offer).then(function (oRef) {
+          return fb.db.collection('transactions').add({
+            offerId: oRef.id, listingId: assetId, buyerId: user.uid,
+            sellerId: offer.sellerId, buyerName: buyer, amount: amount,
+            stage: 'ROOM_OPEN', paymentStatus: 'PENDING_ADMIN',
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        }).then(function (tRef) { go(tRef.id); });
+      }).catch(function () { toast('Offer failed', 'error'); });
+      return;
+    }
+
+    var offers = lsGet('WL_OFFERS', []);
+    var oid = 'OF-' + Date.now().toString(36).toUpperCase();
+    offers.push({ id: oid, listingId: assetId, buyer: buyer, amount: amount, status: 'RECORDED' });
+    lsSet('WL_OFFERS', offers);
+    var txs = lsGet('WL_TX', []);
+    var tid = 'TX-' + Date.now().toString(36).toUpperCase();
+    txs.push({ id: tid, listingId: assetId, buyer: buyer, amount: amount, stage: 'ROOM_OPEN', paymentStatus: 'PENDING_ADMIN' });
+    lsSet('WL_TX', txs);
+    go(tid);
+  };
+
+  window.transaction = function () {
+    var root = document.getElementById('transaction');
+    if (!root) return;
+    var txId = new URLSearchParams(location.search).get('id');
+
+    function draw(tx, asset) {
+      var stages = ['OFFER_RECORDED', 'OFFER_ACCEPTED', 'ROOM_OPEN', 'PAYMENT_MARKED', 'TRANSFER', 'COMPLETE'];
+      var labels = ['Offer recorded', 'Offer accepted', 'Room opened', 'Payment marked (admin)', 'Transfer', 'Complete'];
+      var idx = Math.max(0, stages.indexOf(tx.stage || 'ROOM_OPEN'));
+      root.innerHTML =
+        '<nav class="breadcrumb"><a href="index.html">Home</a><span>/</span><span class="current">' + (tx.id || txId || '') + '</span></nav>' +
+        '<a class="back-link" href="index.html#market">← Back</a>' +
+        '<div class="sectiontag">TRANSACTION ROOM</div><h1>' + (asset && asset.title || 'Transfer') + '</h1>' +
+        '<div class="statusline"><span>STAGE <b>' + (tx.stage || 'ROOM_OPEN') + '</b></span>' +
+        '<span>PAYMENT <b>' + (tx.paymentStatus || 'PENDING_ADMIN') + '</b></span>' +
+        '<span>AMOUNT <b>' + money(tx.amount) + '</b></span></div>' +
+        '<div class="timeline">' + labels.map(function (l, i) {
+          var c = i < idx ? 'done' : (i === idx ? 'active' : 'pending');
+          return '<div class="' + c + '"><b>' + (i + 1) + '</b> ' + l + '</div>';
+        }).join('') + '</div>' +
+        '<div class="notice"><b>Admin payment</b><p>Payment is marked by admin — not by the browser alone.</p></div>';
+    }
+
+    if (fb.mode === 'firebase' && fb.db && txId) {
+      fb.db.collection('transactions').doc(txId).get().then(function (snap) {
+        if (!snap.exists) { root.innerHTML = '<h1>No transaction</h1>'; return; }
+        var tx = snap.data(); tx.id = snap.id;
+        window.getListingAsync(tx.listingId).then(function (a) { draw(tx, a); });
+      });
+      return;
+    }
+    var txs = lsGet('WL_TX', []);
+    var tx = txs.find(function (t) { return t.id === txId; }) || txs[txs.length - 1];
+    if (!tx) { root.innerHTML = '<h1>No transaction</h1><p><a href="index.html#market">Registry</a></p>'; return; }
+    draw(tx, window.listing(tx.listingId));
+  };
+
+  window.wlSignIn = function (email, password) {
+    if (fb.mode !== 'firebase') { toast('Firebase not connected', 'info'); return Promise.resolve(); }
+    return fb.auth.signInWithEmailAndPassword(email, password);
+  };
+  window.wlSignUp = function (email, password) {
+    if (fb.mode !== 'firebase') { toast('Firebase not connected', 'info'); return Promise.resolve(); }
+    return fb.auth.createUserWithEmailAndPassword(email, password);
+  };
+  window.wlSignOut = function () {
+    if (fb.auth) return fb.auth.signOut();
+    return Promise.resolve();
+  };
+
+  document.addEventListener('DOMContentLoaded', function () {
+    initFirebase().then(function (ok) {
+      var bar = document.querySelector('.systembar span');
+      if (bar) bar.innerHTML = ok ? '<i></i>SYSTEM STATUS: FIREBASE' : '<i></i>SYSTEM STATUS: LOCAL DEMO';
+      assetsLocal();
+      renderGrid();
+      bindSubmit();
+      var searchEl = document.getElementById('search');
+      if (searchEl) {
+        var t;
+        searchEl.addEventListener('input', function () {
+          clearTimeout(t);
+          t = setTimeout(function () { search = searchEl.value || ''; renderGrid(); }, 200);
+        });
+      }
+      if (document.querySelector('.filters')) setFilter('ALL');
+    });
+  });
+})();
