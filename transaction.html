@@ -1,0 +1,13 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Transaction Room — WorkLink SA</title><link rel="stylesheet" href="style.css"></head><body><header><a class="logo" href="index.html">↗ WORKLINK <b>SA</b></a><button class="nav-toggle" aria-label="Toggle navigation" aria-controls="navDrawer">☰</button><nav id="mainNav"><a href="index.html#market">Registry</a><a href="index.html#trust">Trust Centre</a></nav><div id="navDrawer" class="nav-drawer" aria-label="Mobile navigation"><a href="index.html#market">Registry</a><a href="index.html#trust">Trust Centre</a></div></header><main class="detail" id="transaction"></main><script src="firebase-config.js"></script><script src="app.js"></script><script>
+document.addEventListener('DOMContentLoaded', function() {
+  const navToggle = document.querySelector('.nav-toggle');
+  const navDrawer = document.getElementById('navDrawer');
+  
+  navToggle.addEventListener('click', function() {
+    navDrawer.classList.toggle('active');
+    navToggle.setAttribute('aria-expanded', navDrawer.classList.contains('active'));
+  });
+  
+  transaction();
+});
+</script></body></html>
